@@ -5,71 +5,122 @@ import * as cheerio from 'cheerio'
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
 
-async function crawlRundownAI() {
+const axiosConfig = {
+    headers: {
+        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+    }
+}
+
+// 1. 요즘IT 크롤링 함수
+async function crawlYozm(category) {
     try {
-        console.log('🌐 The Rundown AI에서 진짜 데이터를 가져오는 중...')
-        
-        // 1. 헤더 정보를 좀 더 사람처럼(Browser-like) 설정해서 차단 방지
-        const { data: html } = await axios.get('https://www.rundown.ai/articles', {
-            headers: {
-                'accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
-                'user-agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-                'accept-language': 'ko-KR,ko;q=0.9,en-US;q=0.8,en;q=0.7'
-            }
-        })
-        
+        const url = `https://yozm.wishket.com/magazine/list/${category}/`
+        console.log(`🌐 요즘IT(${category}) 데이터를 가져오는 중...`)
+        const { data: html } = await axios.get(url, axiosConfig)
         const $ = cheerio.load(html)
         const articles = []
+        $('.list-item-link').each((i, el) => {
+            const $el = $(el)
+            const title = $el.find('.list-item-title').text().trim()
+            const link = `https://yozm.wishket.com${$el.attr('href')}`
+            let thumbnail = $el.find('.thumbnail-img').attr('src')
+            if (thumbnail && !thumbnail.startsWith('http')) thumbnail = `https://yozm.wishket.com${thumbnail}`
+            const summary = $el.find('.list-item-description').text().trim()
+            if (title && link) {
+                articles.push({ title, link, thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=Yozm+IT', summary, source: `YozmIT-${category}` })
+            }
+        })
+        return articles
+    } catch (e) {
+        console.error(`❌ 요즘IT(${category}) 에러:`, e.message); return []
+    }
+}
 
-        // 2. 더 유연한 파싱 로직
-        // Rundown AI는 보통 <main> 안의 <a> 태그들이 기사 링크입니다.
+// 2. Rundown AI 크롤링 함수
+async function crawlRundownAI() {
+    try {
+        console.log('🌐 The Rundown AI 데이터를 가져오는 중...')
+        const { data: html } = await axios.get('https://www.rundown.ai/articles', axiosConfig)
+        const $ = cheerio.load(html)
+        const articles = []
         $('main a').each((i, el) => {
             const $el = $(el)
             const href = $el.attr('href') || ''
-            
-            // 링크에 '/articles/'가 포함된 것들만 필터링
             if (href.includes('/articles/')) {
-                const title = $el.find('h2, h3, h4, p').first().text().trim() // 제목이 될 만한 요소들 다 뒤짐
+                const title = $el.find('h2, h3, h4, p').first().text().trim()
                 const link = href.startsWith('http') ? href : `https://www.rundown.ai${href}`
                 const thumbnail = $el.find('img').attr('src')
-                const summaryText = $el.find('p').last().text().trim()
-
-                // 제목이 있고 너무 짧지 않은 경우만 저장
                 if (title && title.length > 3) {
-                    articles.push({
-                        title,
-                        link,
-                        thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=Rundown+AI',
-                        summary: summaryText || 'The Rundown AI 최신 아티클'
-                    })
+                    articles.push({ title, link, thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=Rundown+AI', summary: 'The Rundown AI 최신 아티클', source: 'RundownAI' })
                 }
             }
         })
+        return articles
+    } catch (e) {
+        console.error('❌ Rundown AI 에러:', e.message); return []
+    }
+}
 
-        // 중복 링크 제거
-        const uniqueArticles = Array.from(new Map(articles.map(item => [item.link, item])).values())
+// 3. AI 타임스 크롤링 함수 (NEW!)
+async function crawlAITimes() {
+    try {
+        console.log('🌐 AI 타임스 데이터를 가져오는 중...')
+        const url = 'https://www.aitimes.com/news/articleList.html?box_idxno=10&view_type=sm'
+        const { data: html } = await axios.get(url, axiosConfig)
+        const $ = cheerio.load(html)
+        const articles = []
 
-        console.log(`🔎 총 ${uniqueArticles.length}건의 아티클을 발견했습니다.`)
+        // AI 타임스 리스트 아이템 선택자
+        $('.user-focus .list-block').each((i, el) => {
+            const $el = $(el)
+            const title = $el.find('.list-titles strong').text().trim()
+            const relativeLink = $el.find('a').attr('href')
+            const link = `https://www.aitimes.com${relativeLink}`
+            const thumbnail = $el.find('.list-image').css('background-image')?.replace(/^url\(["']?/, '').replace(/["']?\)$/, '')
+            const summary = $el.find('.list-summary').text().trim()
 
-        if (uniqueArticles.length === 0) {
-            console.log('⚠️ 여전히 데이터를 찾지 못했습니다.');
-            // 로그 출력을 위해 HTML 구조를 살짝 출력해볼 수 있습니다 (디버깅용)
-            // console.log($('body').text().substring(0, 500)); 
-            return;
-        }
+            if (title && link) {
+                articles.push({
+                    title,
+                    link,
+                    thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=AI+Times',
+                    summary: summary.substring(0, 150) || 'AI 타임스 최신 소식',
+                    source: 'AITimes'
+                })
+            }
+        })
+        return articles
+    } catch (e) {
+        console.error('❌ AI 타임스 에러:', e.message); return []
+    }
+}
 
-        // 3. Supabase upsert
+// 4. 메인 실행 함수
+async function main() {
+    // 4곳의 데이터를 병렬로 동시 수집
+    const [yozmBiz, yozmTrend, rundownDocs, aiTimesDocs] = await Promise.all([
+        crawlYozm('business'),
+        crawlYozm('trend'),
+        crawlRundownAI(),
+        crawlAITimes()
+    ])
+    
+    const allArticles = [...yozmBiz, ...yozmTrend, ...rundownDocs, ...aiTimesDocs]
+    
+    // 중복 제거
+    const uniqueArticles = Array.from(new Map(allArticles.map(item => [item.link, item])).values())
+
+    console.log(`🔎 총 ${uniqueArticles.length}건의 유니크 아티클 수집 완료.`)
+
+    if (uniqueArticles.length > 0) {
         const { data, error } = await supabase
             .from('news_feed')
             .upsert(uniqueArticles, { onConflict: 'link' })
             .select()
 
-        if (error) throw error
-        console.log(`✅ 성공! ${data.length}개의 데이터를 DB에 동기화했습니다.`);
-
-    } catch (error) {
-        console.error('❌ 에러 발생:', error.message)
+        if (error) console.error('❌ Supabase 저장 실패:', error.message)
+        else console.log(`✅ 성공! ${data.length}개의 데이터를 DB에 동기화했습니다.`)
     }
 }
 
-crawlRundownAI()
+main()
