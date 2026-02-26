@@ -1,126 +1,125 @@
 import 'dotenv/config'
 import { createClient } from '@supabase/supabase-js'
-import axios from 'axios'
-import * as cheerio from 'cheerio'
+import puppeteer from 'puppeteer-extra'
+import StealthPlugin from 'puppeteer-extra-plugin-stealth'
+
+puppeteer.use(StealthPlugin())
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
 
-const axiosConfig = {
-    headers: {
-        'user-agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-    }
-}
-
-// 1. 요즘IT 크롤링 함수
-async function crawlYozm(category) {
+async function scrapeWithBrowser(url, parserSelector) {
+    const browser = await puppeteer.launch({ 
+        headless: "new", // "new"로 하면 창이 안 뜨고 뒤에서 돕니다. 확인하고 싶으시면 false로 바꾸세요.
+        args: ['--no-sandbox', '--window-size=1280,800'] 
+    });
+    const page = await browser.newPage();
+    
     try {
-        const url = `https://yozm.wishket.com/magazine/list/${category}/`
-        console.log(`🌐 요즘IT(${category}) 데이터를 가져오는 중...`)
-        const { data: html } = await axios.get(url, axiosConfig)
-        const $ = cheerio.load(html)
-        const articles = []
-        $('.list-item-link').each((i, el) => {
-            const $el = $(el)
-            const title = $el.find('.list-item-title').text().trim()
-            const link = `https://yozm.wishket.com${$el.attr('href')}`
-            let thumbnail = $el.find('.thumbnail-img').attr('src')
-            if (thumbnail && !thumbnail.startsWith('http')) thumbnail = `https://yozm.wishket.com${thumbnail}`
-            const summary = $el.find('.list-item-description').text().trim()
-            if (title && link) {
-                articles.push({ title, link, thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=Yozm+IT', summary, source: `YozmIT-${category}` })
+        await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
+        console.log(`🌐 접속 시도: ${url}`);
+        
+        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        
+        // 요즘IT의 경우 스크롤을 살짝 내려야 이미지가 로딩됩니다.
+        await page.evaluate(() => window.scrollBy(0, 500));
+        await new Promise(r => setTimeout(r, 2000)); 
+
+        const articles = await page.evaluate((selector) => {
+            const results = [];
+            
+            if (selector === 'yozm') {
+                // [요즘IT 정밀 타겟팅]
+                // 작성자 링크 제외, 오직 기사 본문 링크(data-testid="contentsItem-item-link")만 찾습니다.
+                const items = document.querySelectorAll('article'); // 각 기사 덩어리
+                items.forEach(item => {
+                    const linkEl = item.querySelector('a[data-testid="contentsItem-item-link"]');
+                    const titleEl = item.querySelector('h3');
+                    const summaryEl = item.querySelector('[data-testid="contentsItem-description"]');
+                    const imgEl = item.querySelector('img');
+
+                    if (linkEl && titleEl) {
+                        results.push({
+                            title: titleEl.innerText.trim(),
+                            link: linkEl.href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: summaryEl?.innerText.trim() || titleEl.innerText.trim(),
+                            source: 'YozmIT'
+                        });
+                    }
+                });
+            } else if (selector === 'aitimes') {
+                // [AI 타임스 정밀 타겟팅]
+                // .altlist-webzine-item 단위로 긁습니다.
+                const items = document.querySelectorAll('.altlist-webzine-item');
+                items.forEach(item => {
+                    const titleEl = item.querySelector('.altlist-subject a');
+                    const summaryEl = item.querySelector('.altlist-summary');
+                    const imgEl = item.querySelector('.altlist-image img');
+
+                    if (titleEl) {
+                        results.push({
+                            title: titleEl.innerText.trim(),
+                            link: titleEl.href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: summaryEl?.innerText.trim() || titleEl.innerText.trim(),
+                            source: 'AITimes'
+                        });
+                    }
+                });
+            } else if (selector === 'rundown') {
+                // Rundown AI (기존 성공 로직 유지)
+                document.querySelectorAll('main a').forEach(el => {
+                    if (el.href.includes('/articles/')) {
+                        const title = el.innerText.split('\n')[0].trim();
+                        if (title.length > 5) {
+                            results.push({ 
+                                title, 
+                                link: el.href, 
+                                thumbnail: el.querySelector('img')?.src || '', 
+                                summary: title, 
+                                source: 'RundownAI' 
+                            });
+                        }
+                    }
+                });
             }
-        })
-        return articles
+            return results;
+        }, parserSelector);
+
+        await browser.close();
+        console.log(`✅ ${url} -> ${articles.length}건 수집 성공`);
+        return articles;
     } catch (e) {
-        console.error(`❌ 요즘IT(${category}) 에러:`, e.message); return []
+        console.error(`❌ 에러 발생:`, e.message);
+        await browser.close();
+        return [];
     }
 }
 
-// 2. Rundown AI 크롤링 함수
-async function crawlRundownAI() {
-    try {
-        console.log('🌐 The Rundown AI 데이터를 가져오는 중...')
-        const { data: html } = await axios.get('https://www.rundown.ai/articles', axiosConfig)
-        const $ = cheerio.load(html)
-        const articles = []
-        $('main a').each((i, el) => {
-            const $el = $(el)
-            const href = $el.attr('href') || ''
-            if (href.includes('/articles/')) {
-                const title = $el.find('h2, h3, h4, p').first().text().trim()
-                const link = href.startsWith('http') ? href : `https://www.rundown.ai${href}`
-                const thumbnail = $el.find('img').attr('src')
-                if (title && title.length > 3) {
-                    articles.push({ title, link, thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=Rundown+AI', summary: 'The Rundown AI 최신 아티클', source: 'RundownAI' })
-                }
-            }
-        })
-        return articles
-    } catch (e) {
-        console.error('❌ Rundown AI 에러:', e.message); return []
-    }
-}
-
-// 3. AI 타임스 크롤링 함수 (NEW!)
-async function crawlAITimes() {
-    try {
-        console.log('🌐 AI 타임스 데이터를 가져오는 중...')
-        const url = 'https://www.aitimes.com/news/articleList.html?box_idxno=10&view_type=sm'
-        const { data: html } = await axios.get(url, axiosConfig)
-        const $ = cheerio.load(html)
-        const articles = []
-
-        // AI 타임스 리스트 아이템 선택자
-        $('.user-focus .list-block').each((i, el) => {
-            const $el = $(el)
-            const title = $el.find('.list-titles strong').text().trim()
-            const relativeLink = $el.find('a').attr('href')
-            const link = `https://www.aitimes.com${relativeLink}`
-            const thumbnail = $el.find('.list-image').css('background-image')?.replace(/^url\(["']?/, '').replace(/["']?\)$/, '')
-            const summary = $el.find('.list-summary').text().trim()
-
-            if (title && link) {
-                articles.push({
-                    title,
-                    link,
-                    thumbnail: thumbnail || 'https://via.placeholder.com/400x200?text=AI+Times',
-                    summary: summary.substring(0, 150) || 'AI 타임스 최신 소식',
-                    source: 'AITimes'
-                })
-            }
-        })
-        return articles
-    } catch (e) {
-        console.error('❌ AI 타임스 에러:', e.message); return []
-    }
-}
-
-// 4. 메인 실행 함수
 async function main() {
-    // 4곳의 데이터를 병렬로 동시 수집
-    const [yozmBiz, yozmTrend, rundownDocs, aiTimesDocs] = await Promise.all([
-        crawlYozm('business'),
-        crawlYozm('trend'),
-        crawlRundownAI(),
-        crawlAITimes()
-    ])
-    
-    const allArticles = [...yozmBiz, ...yozmTrend, ...rundownDocs, ...aiTimesDocs]
-    
-    // 중복 제거
-    const uniqueArticles = Array.from(new Map(allArticles.map(item => [item.link, item])).values())
+    console.log('🚀 [HTML 분석 완료] 초정밀 크롤링을 시작합니다...');
 
-    console.log(`🔎 총 ${uniqueArticles.length}건의 유니크 아티클 수집 완료.`)
+    const [yozmBiz, yozmTrend, aiTimes, rundown] = await Promise.all([
+        scrapeWithBrowser('https://yozm.wishket.com/magazine/list/business/', 'yozm'),
+        scrapeWithBrowser('https://yozm.wishket.com/magazine/list/trend/', 'yozm'),
+        scrapeWithBrowser('https://www.aitimes.com/news/articleList.html?box_idxno=10&view_type=sm', 'aitimes'),
+        scrapeWithBrowser('https://www.rundown.ai/articles', 'rundown')
+    ]);
+
+    const allArticles = [...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown];
+    const uniqueArticles = Array.from(new Map(allArticles.map(item => [item.link, item])).values());
+
+    console.log(`📊 최종 합계: ${uniqueArticles.length}건`);
 
     if (uniqueArticles.length > 0) {
         const { data, error } = await supabase
             .from('news_feed')
             .upsert(uniqueArticles, { onConflict: 'link' })
-            .select()
+            .select();
 
-        if (error) console.error('❌ Supabase 저장 실패:', error.message)
-        else console.log(`✅ 성공! ${data.length}개의 데이터를 DB에 동기화했습니다.`)
+        if (error) console.error('❌ 저장 실패:', error.message);
+        else console.log(`🎉 미션 완료! ${data.length}개의 데이터가 정확한 링크와 함께 저장되었습니다.`);
     }
 }
 
-main()
+main();
