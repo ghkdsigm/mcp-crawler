@@ -7,6 +7,15 @@ puppeteer.use(StealthPlugin())
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
 
+function shuffleArray(items) {
+    const shuffled = [...items];
+    for (let i = shuffled.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [shuffled[i], shuffled[j]] = [shuffled[j], shuffled[i]];
+    }
+    return shuffled;
+}
+
 async function scrapeWithBrowser(url, parserSelector) {
     const browser = await puppeteer.launch({ 
         headless: "new", // "new"로 하면 창이 안 뜨고 뒤에서 돕니다. 확인하고 싶으시면 false로 바꾸세요.
@@ -82,6 +91,44 @@ async function scrapeWithBrowser(url, parserSelector) {
                         }
                     }
                 });
+            } else if (selector === 'dailytrend') {
+                // DailyTrend 비즈니스트렌드 목록 크롤링
+                const pushIfValid = (titleEl, summaryEl, imgEl) => {
+                    if (!titleEl) return;
+                    const href = titleEl.href || '';
+                    const title = titleEl.innerText?.trim() || '';
+                    if (!href || !title) return;
+
+                    // 카테고리/로그인/회원가입 등 비기사 링크 제외
+                    const blockedPaths = ['/category/', '/login', '/register', '/terms', '/privacy'];
+                    if (!href.includes('dailytrend.co.kr')) return;
+                    if (blockedPaths.some(path => href.includes(path))) return;
+
+                    results.push({
+                        title,
+                        link: href,
+                        thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                        summary: summaryEl?.innerText?.trim() || title,
+                        source: 'DailyTrend'
+                    });
+                };
+
+                // 1차: 기사 카드 단위 수집
+                const items = document.querySelectorAll('article');
+                items.forEach(item => {
+                    const titleEl = item.querySelector('h2 a, h3 a, .entry-title a');
+                    const summaryEl = item.querySelector('p, .excerpt, .entry-summary');
+                    const imgEl = item.querySelector('img');
+                    pushIfValid(titleEl, summaryEl, imgEl);
+                });
+
+                // 2차: 구조 변경 대비 fallback
+                if (results.length === 0) {
+                    document.querySelectorAll('main h2 a, main h3 a').forEach(linkEl => {
+                        if (linkEl.closest('header, nav, footer')) return;
+                        pushIfValid(linkEl, null, linkEl.closest('article, section, div')?.querySelector('img'));
+                    });
+                }
             }
             return results;
         }, parserSelector);
@@ -99,22 +146,24 @@ async function scrapeWithBrowser(url, parserSelector) {
 async function main() {
     console.log('🚀 [HTML 분석 완료] 초정밀 크롤링을 시작합니다...');
 
-    const [yozmBiz, yozmTrend, aiTimes, rundown] = await Promise.all([
+    const [yozmBiz, yozmTrend, aiTimes, rundown, dailytrendBiz] = await Promise.all([
         scrapeWithBrowser('https://yozm.wishket.com/magazine/list/business/', 'yozm'),
         scrapeWithBrowser('https://yozm.wishket.com/magazine/list/trend/', 'yozm'),
         scrapeWithBrowser('https://www.aitimes.com/news/articleList.html?box_idxno=10&view_type=sm', 'aitimes'),
-        scrapeWithBrowser('https://www.rundown.ai/articles', 'rundown')
+        scrapeWithBrowser('https://www.rundown.ai/articles', 'rundown'),
+        scrapeWithBrowser('https://www.dailytrend.co.kr/category/business-trend/', 'dailytrend')
     ]);
 
-    const allArticles = [...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown];
+    const allArticles = [...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown, ...dailytrendBiz];
     const uniqueArticles = Array.from(new Map(allArticles.map(item => [item.link, item])).values());
+    const shuffledArticles = shuffleArray(uniqueArticles);
 
-    console.log(`📊 최종 합계: ${uniqueArticles.length}건`);
+    console.log(`📊 최종 합계: ${shuffledArticles.length}건 (셔플 적용)`);
 
-    if (uniqueArticles.length > 0) {
+    if (shuffledArticles.length > 0) {
         const { data, error } = await supabase
             .from('news_feed')
-            .upsert(uniqueArticles, { onConflict: 'link' })
+            .upsert(shuffledArticles, { onConflict: 'link' })
             .select();
 
         if (error) console.error('❌ 저장 실패:', error.message);
