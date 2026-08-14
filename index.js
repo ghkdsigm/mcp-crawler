@@ -27,7 +27,8 @@ async function scrapeWithBrowser(url, parserSelector) {
         await page.setUserAgent('Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36');
         console.log(`🌐 접속 시도: ${url}`);
         
-        await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+        await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 60000 });
+        await page.waitForNetworkIdle({ timeout: 15000 }).catch(() => {});
         
         // 요즘IT의 경우 스크롤을 살짝 내려야 이미지가 로딩됩니다.
         await page.evaluate(() => window.scrollBy(0, 500));
@@ -129,6 +130,347 @@ async function scrapeWithBrowser(url, parserSelector) {
                         pushIfValid(linkEl, null, linkEl.closest('article, section, div')?.querySelector('img'));
                     });
                 }
+            } else if (selector === 'dailycar') {
+                // 데일리카 - 자동차 전문 뉴스
+                const items = document.querySelectorAll('li');
+                items.forEach(item => {
+                    const linkEl = item.querySelector('a[href*="type=view&autoId="]');
+                    const imgEl = item.querySelector('img');
+                    if (linkEl) {
+                        const title = linkEl.innerText.trim();
+                        if (title.length > 5) {
+                            results.push({
+                                title,
+                                link: linkEl.href,
+                                thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                                summary: title,
+                                source: 'DailyCar'
+                            });
+                        }
+                    }
+                });
+            } else if (selector === 'autoherald') {
+                // 오토헤럴드 - 자동차 뉴스
+                const items = document.querySelectorAll('.item');
+                items.forEach(item => {
+                    const linkEl = item.querySelector('a[href*="articleView"]');
+                    const imgEl = item.querySelector('img');
+                    if (linkEl) {
+                        const title = linkEl.innerText.replace(/^\d+\s*/, '').trim();
+                        if (title.length > 5) {
+                            results.push({
+                                title,
+                                link: linkEl.href,
+                                thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                                summary: title,
+                                source: 'AutoHerald'
+                            });
+                        }
+                    }
+                });
+            } else if (selector === 'motorgraph') {
+                // 모터그래프 - 자동차 전문지 (JEMIN CMS 구조)
+                const items = document.querySelectorAll('.type2 li, .article-list-content li, #section-list li');
+                items.forEach(item => {
+                    const titleEl = item.querySelector('.titles a, .list-titles a, h4 a');
+                    const summaryEl = item.querySelector('.lead, .list-summary');
+                    const imgEl = item.querySelector('img');
+                    if (titleEl) {
+                        const title = titleEl.innerText.trim();
+                        if (title.length > 5) {
+                            results.push({
+                                title,
+                                link: titleEl.href,
+                                thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                                summary: summaryEl?.innerText?.trim() || title,
+                                source: 'MotorGraph'
+                            });
+                        }
+                    }
+                });
+            } else if (selector === 'bobaedream') {
+                // 보배드림 자동차뉴스
+                const links = document.querySelectorAll('a[href*="/view?code=nnews&No="]');
+                const seen = new Set();
+                links.forEach(linkEl => {
+                    const title = linkEl.innerText.replace(/\[.*?\]/g, '').trim();
+                    const href = linkEl.href;
+                    if (title.length > 5 && !seen.has(href)) {
+                        seen.add(href);
+                        const row = linkEl.closest('tr, li, div');
+                        const imgEl = row?.querySelector('img');
+                        results.push({
+                            title,
+                            link: href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: title,
+                            source: 'Bobaedream'
+                        });
+                    }
+                });
+            } else if (selector === 'danawa_auto') {
+                // 다나와 자동차 뉴스
+                const links = document.querySelectorAll('a[href*="Work=detail"]');
+                const seen = new Set();
+                links.forEach(linkEl => {
+                    const title = linkEl.innerText.split('\n')[0].trim();
+                    const href = linkEl.href;
+                    if (title.length > 5 && !seen.has(href)) {
+                        seen.add(href);
+                        const parent = linkEl.closest('li, div, td');
+                        const imgEl = parent?.querySelector('img');
+                        results.push({
+                            title,
+                            link: href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: title,
+                            source: 'DanawaAuto'
+                        });
+                    }
+                });
+            } else if (selector === 'encar_magazine') {
+                // 엔카매거진 - 중고차 시세/트렌드
+                const links = document.querySelectorAll('a[href*="/view/"]');
+                const seen = new Set();
+                links.forEach(linkEl => {
+                    const href = linkEl.href;
+                    if (seen.has(href) || !href.includes('encarmagazine.com')) return;
+                    const title = linkEl.innerText.trim();
+                    if (title.length > 5) {
+                        seen.add(href);
+                        const imgEl = linkEl.querySelector('img') || linkEl.closest('div, li, article')?.querySelector('img');
+                        results.push({
+                            title,
+                            link: href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: title,
+                            source: 'EncarMagazine'
+                        });
+                    }
+                });
+            } else if (selector === 'chosunbiz_auto') {
+                // 조선비즈 자동차 - 금리, 경제, 완성차, 수입차 뉴스
+                const items = document.querySelectorAll('[class*="story-card"]');
+                const seen = new Set();
+                items.forEach(item => {
+                    const linkEl = item.querySelector('a[href*="/industry/car/"]');
+                    if (!linkEl) return;
+                    const href = linkEl.href;
+                    if (seen.has(href)) return;
+                    const title = linkEl.innerText.trim();
+                    if (title.length > 5) {
+                        seen.add(href);
+                        const imgEl = item.querySelector('img');
+                        results.push({
+                            title,
+                            link: href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: title,
+                            source: 'ChosunBiz'
+                        });
+                    }
+                });
+                // fallback
+                if (results.length === 0) {
+                    document.querySelectorAll('a[href*="/industry/car/"]').forEach(linkEl => {
+                        const href = linkEl.href;
+                        if (seen.has(href)) return;
+                        const title = linkEl.innerText.trim();
+                        if (title.length > 10) {
+                            seen.add(href);
+                            results.push({
+                                title,
+                                link: href,
+                                thumbnail: '',
+                                summary: title,
+                                source: 'ChosunBiz'
+                            });
+                        }
+                    });
+                }
+            } else if (selector === 'molit') {
+                // 국토교통부 보도자료 - 모빌리티·자동차
+                const items = document.querySelectorAll('tr, .board_list li, .bbs_list li');
+                items.forEach(item => {
+                    const linkEl = item.querySelector('a[href*="dtl.jsp"], a[href*="DTL.jsp"], a[href*="lst.jsp"]');
+                    if (!linkEl) return;
+                    const title = linkEl.innerText.trim();
+                    if (title.length > 5) {
+                        results.push({
+                            title,
+                            link: linkEl.href,
+                            thumbnail: '',
+                            summary: title,
+                            source: 'MOLIT'
+                        });
+                    }
+                });
+                // fallback: 테이블 구조
+                if (results.length === 0) {
+                    document.querySelectorAll('a').forEach(linkEl => {
+                        const href = linkEl.href || '';
+                        if (href.includes('dtl.jsp') || href.includes('DTL.jsp')) {
+                            const title = linkEl.innerText.trim();
+                            if (title.length > 5) {
+                                results.push({
+                                    title,
+                                    link: href,
+                                    thumbnail: '',
+                                    summary: title,
+                                    source: 'MOLIT'
+                                });
+                            }
+                        }
+                    });
+                }
+            } else if (selector === 'car_recall') {
+                // 자동차리콜센터 - 리콜현황 (car.go.kr)
+                document.querySelectorAll('a').forEach(a => {
+                    const onclick = a.getAttribute('onclick') || '';
+                    const text = a.innerText?.trim() || '';
+                    if (onclick.includes('detailView') && text.length > 10) {
+                        const idMatch = onclick.match(/detailView\('(\d+)'/);
+                        const id = idMatch ? idMatch[1] : '';
+                        results.push({
+                            title: text.replace(/\n.*/s, '').trim(),
+                            link: `https://www.car.go.kr/ri/stat/list.do#${id}`,
+                            thumbnail: '',
+                            summary: text.substring(0, 200),
+                            source: 'CarRecall'
+                        });
+                    }
+                });
+            } else if (selector === 'car_recall_news') {
+                // 자동차리콜센터 - 리콜보도자료
+                document.querySelectorAll('a').forEach(a => {
+                    const onclick = a.getAttribute('onclick') || '';
+                    const text = a.innerText?.trim() || '';
+                    if (onclick.includes('detailView') && text.length > 10) {
+                        const idMatch = onclick.match(/detailView\('(\d+)'/);
+                        const id = idMatch ? idMatch[1] : '';
+                        results.push({
+                            title: text.split('\n')[0].trim(),
+                            link: `https://www.car.go.kr/sd/newsDta/list.do#${id}`,
+                            thumbnail: '',
+                            summary: text.substring(0, 300).replace(/\n/g, ' ').trim(),
+                            source: 'CarRecallNews'
+                        });
+                    }
+                });
+            } else if (selector === 'fsc') {
+                // 금융위원회 보도자료 - 금리, 금융정책
+                document.querySelectorAll('.subject a, .board-list a').forEach(a => {
+                    const href = a.href || '';
+                    const text = a.innerText?.trim() || '';
+                    if (href.includes('fsc.go.kr/no010101/') && text.length > 10) {
+                        results.push({
+                            title: text.replace(/\. 금일.*$/, '').trim(),
+                            link: href.split('?')[0],
+                            thumbnail: '',
+                            summary: text.substring(0, 200),
+                            source: 'FSC'
+                        });
+                    }
+                });
+            } else if (selector === 'kma') {
+                // 기상청 보도자료 - 날씨, 기후
+                document.querySelectorAll('a').forEach(a => {
+                    const href = a.href || '';
+                    const text = a.innerText?.trim() || '';
+                    if (href.includes('press') && href.includes('mode=view') && text.length > 10) {
+                        results.push({
+                            title: text,
+                            link: href,
+                            thumbnail: '',
+                            summary: text,
+                            source: 'KMA'
+                        });
+                    }
+                });
+            } else if (selector === 'knia') {
+                // 손해보험협회 보도자료 - 자동차보험
+                document.querySelectorAll('a').forEach(a => {
+                    const href = a.href || '';
+                    const text = a.innerText?.trim() || '';
+                    if (href.includes('/data/news/') && text.length > 10) {
+                        results.push({
+                            title: text,
+                            link: href,
+                            thumbnail: '',
+                            summary: text,
+                            source: 'KNIA'
+                        });
+                    }
+                });
+                // fallback: 게시판 구조
+                if (results.length === 0) {
+                    document.querySelectorAll('tr, .board-item, li').forEach(item => {
+                        const linkEl = item.querySelector('a');
+                        if (!linkEl) return;
+                        const text = linkEl.innerText?.trim() || '';
+                        const href = linkEl.href || '';
+                        if (text.length > 10 && href.includes('knia.or.kr') && !href.includes('contribute') && !href.includes('report') && !href.includes('coins')) {
+                            results.push({
+                                title: text,
+                                link: href,
+                                thumbnail: '',
+                                summary: text,
+                                source: 'KNIA'
+                            });
+                        }
+                    });
+                }
+            } else if (selector === 'opinet') {
+                // 오피넷 - 유가 정보 (메인페이지에서 유가 데이터 추출)
+                const priceInfo = [];
+                document.querySelectorAll('span, div, td, th').forEach(el => {
+                    const text = el.innerText?.trim() || '';
+                    if (text.match(/(휘발유|경유|LPG|등유)/) && text.match(/[\d,.]+/)) {
+                        priceInfo.push(text.substring(0, 100));
+                    }
+                });
+                if (priceInfo.length > 0) {
+                    const today = new Date().toISOString().split('T')[0];
+                    results.push({
+                        title: `[오피넷] ${today} 전국 평균 유가`,
+                        link: `https://www.opinet.co.kr/user/main/mainView.do?date=${today}`,
+                        thumbnail: '',
+                        summary: priceInfo.join(' | '),
+                        source: 'Opinet'
+                    });
+                }
+                // 공지사항/뉴스 링크도 수집
+                document.querySelectorAll('a').forEach(a => {
+                    const href = a.href || '';
+                    const text = a.innerText?.trim() || '';
+                    if (text.length > 10 && href.includes('opinet.co.kr') && (href.includes('notice') || href.includes('board'))) {
+                        results.push({
+                            title: text,
+                            link: href,
+                            thumbnail: '',
+                            summary: text,
+                            source: 'Opinet'
+                        });
+                    }
+                });
+            } else if (selector === 'edaily') {
+                // 이데일리 경제 - 금리, 환율, 무역, 경제동향
+                const seen = new Set();
+                document.querySelectorAll('a').forEach(a => {
+                    const href = a.href || '';
+                    const text = a.innerText?.trim() || '';
+                    if (href.includes('edaily.co.kr/News/Read') && text.length > 10 && !seen.has(href)) {
+                        seen.add(href);
+                        const imgEl = a.querySelector('img') || a.closest('div, li')?.querySelector('img');
+                        results.push({
+                            title: text.substring(0, 200),
+                            link: href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: text.substring(0, 200),
+                            source: 'Edaily'
+                        });
+                    }
+                });
             }
             return results;
         }, parserSelector);
@@ -146,6 +488,7 @@ async function scrapeWithBrowser(url, parserSelector) {
 async function main() {
     console.log('🚀 [HTML 분석 완료] 초정밀 크롤링을 시작합니다...');
 
+    // === 기존 IT/비즈니스 뉴스 ===
     const [yozmBiz, yozmTrend, aiTimes, rundown, dailytrendBiz] = await Promise.all([
         scrapeWithBrowser('https://yozm.wishket.com/magazine/list/business/', 'yozm'),
         scrapeWithBrowser('https://yozm.wishket.com/magazine/list/trend/', 'yozm'),
@@ -154,7 +497,49 @@ async function main() {
         scrapeWithBrowser('https://www.dailytrend.co.kr/category/business-trend/', 'dailytrend')
     ]);
 
-    const allArticles = [...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown, ...dailytrendBiz];
+    // === 자동차·중고차 시장 뉴스 ===
+    const [dailycar, autoherald, motorgraph, bobaedream, danawaAuto, encarMag, chosunbiz, molit] = await Promise.all([
+        // 1. 자동차 시장 - 신차, 리콜, 전기차, 하이브리드
+        scrapeWithBrowser('https://www.dailycar.co.kr/content/news.html', 'dailycar'),
+        // 2. 자동차 뉴스 - 수입차, 완성차, 리콜
+        scrapeWithBrowser('https://www.autoherald.co.kr/news/articleList.html?sc_sub_section_code=S2N46&view_type=sm', 'autoherald'),
+        // 3. 중고차 시세, 자동차 뉴스
+        scrapeWithBrowser('https://www.motorgraph.com/news/articleList.html?sc_sub_section_code=S2N1', 'motorgraph'),
+        // 4. 보배드림 자동차뉴스 - 커뮤니티 기반 자동차 뉴스
+        scrapeWithBrowser('https://www.bobaedream.co.kr/list?code=nnews', 'bobaedream'),
+        // 5. 다나와 자동차 뉴스 - 종합 자동차 뉴스
+        scrapeWithBrowser('https://auto.danawa.com/news/', 'danawa_auto'),
+        // 6. 엔카매거진 - 중고차 시세/트렌드
+        scrapeWithBrowser('https://www.encarmagazine.com/', 'encar_magazine'),
+        // 7. 조선비즈 자동차 - 금리, 경제, 완성차, 수입차
+        scrapeWithBrowser('https://biz.chosun.com/car/', 'chosunbiz_auto'),
+        // 8. 국토교통부 보도자료 - 정부정책, 자동차법, 배출가스규제
+        scrapeWithBrowser('https://www.molit.go.kr/USR/NEWS/m_71/lst.jsp?search_section=p_sec_12', 'molit')
+    ]);
+
+    // === 리콜·정책·금융·환경 뉴스 ===
+    const [carRecall, carRecallNews, fsc, kma, knia, opinet, edaily] = await Promise.all([
+        // 9. 리콜현황 - 자동차리콜센터
+        scrapeWithBrowser('https://www.car.go.kr/ri/stat/list.do', 'car_recall'),
+        // 10. 리콜보도자료 - 자동차리콜센터
+        scrapeWithBrowser('https://www.car.go.kr/sd/newsDta/list.do', 'car_recall_news'),
+        // 11. 금융위원회 보도자료 - 금리, 할부정책, 금융정책
+        scrapeWithBrowser('https://www.fsc.go.kr/no010101', 'fsc'),
+        // 12. 기상청 보도자료 - 날씨, 폭우, 태풍
+        scrapeWithBrowser('https://www.kma.go.kr/kma/news/press.jsp', 'kma'),
+        // 13. 손해보험협회 - 자동차보험, 보험료
+        scrapeWithBrowser('https://www.knia.or.kr/data/news', 'knia'),
+        // 14. 오피넷 - 유가 정보 (휘발유, 경유, LPG)
+        scrapeWithBrowser('https://www.opinet.co.kr/user/main/mainView.do', 'opinet'),
+        // 15. 이데일리 경제 - 금리, 환율, 무역, 경제동향
+        scrapeWithBrowser('https://www.edaily.co.kr/economy', 'edaily')
+    ]);
+
+    const allArticles = [
+        ...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown, ...dailytrendBiz,
+        ...dailycar, ...autoherald, ...motorgraph, ...bobaedream, ...danawaAuto, ...encarMag, ...chosunbiz, ...molit,
+        ...carRecall, ...carRecallNews, ...fsc, ...kma, ...knia, ...opinet, ...edaily
+    ];
     const uniqueArticles = Array.from(new Map(allArticles.map(item => [item.link, item])).values());
     const shuffledArticles = shuffleArray(uniqueArticles);
 

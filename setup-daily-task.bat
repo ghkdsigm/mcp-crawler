@@ -8,10 +8,10 @@ set TASK_NAME=MCP-Crawler-Daily
 echo 작업 스케줄러에 등록합니다.
 echo - 작업 이름: %TASK_NAME%
 echo - 실행 파일: %BAT_PATH%
-echo - 실행 시간: 매일 오전 9시
+echo - 실행 시간: 매일 오전 6시
 echo.
 
-schtasks /create /tn "%TASK_NAME%" /tr "\"%BAT_PATH%\"" /sc daily /st 09:00 /f /rl highest
+schtasks /create /tn "%TASK_NAME%" /tr "\"%BAT_PATH%\"" /sc daily /st 06:00 /f /rl highest
 if %ERRORLEVEL% neq 0 (
     echo 등록 실패. 관리자 권한으로 실행해 보세요.
     pause
