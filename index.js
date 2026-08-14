@@ -7,6 +7,17 @@ puppeteer.use(StealthPlugin())
 
 const supabase = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_KEY)
 
+function extractDateFromUrl(url) {
+    // URL에서 날짜 추출: /2026/08/14/ 또는 /20260814/ 패턴
+    const m = url.match(/\/(\d{4})\/(\d{2})\/(\d{2})\//) || url.match(/\/(\d{4})(\d{2})(\d{2})\//)
+    if (m) return `${m[1]}-${m[2]}-${m[3]}`
+    return null
+}
+
+function todayDate() {
+    return new Date().toISOString().split('T')[0]
+}
+
 function shuffleArray(items) {
     const shuffled = [...items];
     for (let i = shuffled.length - 1; i > 0; i--) {
@@ -175,15 +186,19 @@ async function scrapeWithBrowser(url, parserSelector) {
                     const titleEl = item.querySelector('.titles a, .list-titles a, h4 a');
                     const summaryEl = item.querySelector('.lead, .list-summary');
                     const imgEl = item.querySelector('img');
+                    const dateEl = item.querySelector('em.replace-date, .byline em, .dated');
                     if (titleEl) {
                         const title = titleEl.innerText.trim();
                         if (title.length > 5) {
+                            const dateText = dateEl?.innerText?.trim() || '';
+                            const dm = dateText.match(/(\d{4})[.](\d{2})[.](\d{2})/);
                             results.push({
                                 title,
                                 link: titleEl.href,
                                 thumbnail: imgEl?.currentSrc || imgEl?.src || '',
                                 summary: summaryEl?.innerText?.trim() || title,
-                                source: 'MotorGraph'
+                                source: 'MotorGraph',
+                                published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
                             });
                         }
                     }
@@ -192,6 +207,7 @@ async function scrapeWithBrowser(url, parserSelector) {
                 // 보배드림 자동차뉴스
                 const links = document.querySelectorAll('a[href*="/view?code=nnews&No="]');
                 const seen = new Set();
+                const year = new Date().getFullYear();
                 links.forEach(linkEl => {
                     const title = linkEl.innerText.replace(/\[.*?\]/g, '').trim();
                     const href = linkEl.href;
@@ -199,12 +215,16 @@ async function scrapeWithBrowser(url, parserSelector) {
                         seen.add(href);
                         const row = linkEl.closest('tr, li, div');
                         const imgEl = row?.querySelector('img');
+                        const dateEl = row?.querySelector('td.date, .date');
+                        const dateText = dateEl?.innerText?.trim() || '';
+                        const dm = dateText.match(/(\d{2})\/(\d{2})/);
                         results.push({
                             title,
                             link: href,
                             thumbnail: imgEl?.currentSrc || imgEl?.src || '',
                             summary: title,
-                            source: 'Bobaedream'
+                            source: 'Bobaedream',
+                            published_at: dm ? `${year}-${dm[1]}-${dm[2]}` : ''
                         });
                     }
                 });
@@ -421,35 +441,49 @@ async function scrapeWithBrowser(url, parserSelector) {
                     });
                 }
             } else if (selector === 'opinet') {
-                // 오피넷 - 유가 정보 (메인페이지에서 유가 데이터 추출)
-                const priceInfo = [];
-                document.querySelectorAll('span, div, td, th').forEach(el => {
-                    const text = el.innerText?.trim() || '';
-                    if (text.match(/(휘발유|경유|LPG|등유)/) && text.match(/[\d,.]+/)) {
-                        priceInfo.push(text.substring(0, 100));
+                // 오피넷 - 유가 정보 (메인페이지에서 유종별 가격 추출)
+                const priceDiv = document.querySelector('.oll_price');
+                if (priceDiv) {
+                    const text = priceDiv.innerText || '';
+                    const dateMatch = text.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+                    const pubDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}` : '';
+                    const dateLabel = dateMatch ? `${dateMatch[1]}.${dateMatch[2]}.${dateMatch[3]}` : '오늘';
+
+                    // 전국평균 가격 추출
+                    const gasMatch = text.match(/휘발유[\s\S]*?전국평균[\s\S]*?(\d{3,4}\.\d{2})\s*(▲|▼|-)?\s*([\d.]*)/);
+                    const dieselMatch = text.match(/경유[\s\S]*?전국평균[\s\S]*?(\d{3,4}\.\d{2})\s*(▲|▼|-)?\s*([\d.]*)/);
+
+                    // 전체 텍스트에서 가격 패턴 찾기
+                    const prices = text.match(/\d{3,4}\.\d{2}/g) || [];
+                    const arrows = text.match(/[▲▼]/g) || [];
+
+                    if (prices.length > 0) {
+                        const summary = `[${dateLabel}] 전국 평균 유가 | 휘발유: ${prices[0] || '-'}원 | 경유: ${prices[1] || '-'}원 | LPG: ${prices[2] || '-'}원`;
+                        results.push({
+                            title: `[주간유가] ${dateLabel} 전국 평균 기름값 - 휘발유 ${prices[0]}원`,
+                            link: `https://www.opinet.co.kr/user/main/mainView.do#${pubDate}`,
+                            thumbnail: '',
+                            summary: summary,
+                            source: 'Opinet',
+                            published_at: pubDate
+                        });
                     }
-                });
-                if (priceInfo.length > 0) {
-                    const today = new Date().toISOString().split('T')[0];
-                    results.push({
-                        title: `[오피넷] ${today} 전국 평균 유가`,
-                        link: `https://www.opinet.co.kr/user/main/mainView.do?date=${today}`,
-                        thumbnail: '',
-                        summary: priceInfo.join(' | '),
-                        source: 'Opinet'
-                    });
                 }
-                // 공지사항/뉴스 링크도 수집
+            } else if (selector === 'fuel_news') {
+                // 유가 관련 뉴스 (에너지경제, 유가, 기름값 뉴스)
+                const seen = new Set();
                 document.querySelectorAll('a').forEach(a => {
                     const href = a.href || '';
                     const text = a.innerText?.trim() || '';
-                    if (text.length > 10 && href.includes('opinet.co.kr') && (href.includes('notice') || href.includes('board'))) {
+                    if (href.includes('/news/') && text.length > 10 && !seen.has(href)) {
+                        seen.add(href);
+                        const imgEl = a.querySelector('img') || a.closest('div, li')?.querySelector('img');
                         results.push({
-                            title: text,
+                            title: text.substring(0, 200),
                             link: href,
-                            thumbnail: '',
-                            summary: text,
-                            source: 'Opinet'
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: text.substring(0, 200),
+                            source: 'FuelNews'
                         });
                     }
                 });
@@ -476,8 +510,16 @@ async function scrapeWithBrowser(url, parserSelector) {
         }, parserSelector);
 
         await browser.close();
-        console.log(`✅ ${url} -> ${articles.length}건 수집 성공`);
-        return articles;
+        // published_at이 없는 기사에 URL 날짜 또는 오늘 날짜 적용
+        const today = todayDate();
+        const enriched = articles.map(a => ({
+            ...a,
+            published_at: a.published_at || extractDateFromUrl(a.link) || today
+        }));
+        // 사이트당 최대 30건
+        const limited = enriched.slice(0, 30);
+        console.log(`✅ ${url} -> ${limited.length}건 수집 (원본 ${enriched.length}건)`);
+        return limited;
     } catch (e) {
         console.error(`❌ 에러 발생:`, e.message);
         await browser.close();
@@ -529,7 +571,7 @@ async function main() {
         scrapeWithBrowser('https://www.kma.go.kr/kma/news/press.jsp', 'kma'),
         // 13. 손해보험협회 - 자동차보험, 보험료
         scrapeWithBrowser('https://www.knia.or.kr/data/news', 'knia'),
-        // 14. 오피넷 - 유가 정보 (휘발유, 경유, LPG)
+        // 14. 오피넷 - 주간 유가 (휘발유, 경유, LPG)
         scrapeWithBrowser('https://www.opinet.co.kr/user/main/mainView.do', 'opinet'),
         // 15. 이데일리 경제 - 금리, 환율, 무역, 경제동향
         scrapeWithBrowser('https://www.edaily.co.kr/economy', 'edaily')
