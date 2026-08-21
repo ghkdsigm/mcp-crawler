@@ -505,6 +505,237 @@ async function scrapeWithBrowser(url, parserSelector) {
                         });
                     }
                 });
+            } else if (selector === 'etoday_fx') {
+                // [환율] 이투데이 환율 시세 (유가 Opinet 방식 - 가격 데이터 수집)
+                const pageText = document.body?.innerText || '';
+                // 기준시간 추출: "08.21 13:27" 패턴
+                const timeMatch = pageText.match(/(\d{2})\.(\d{2})\s+(\d{2}:\d{2})/);
+                const year = new Date().getFullYear();
+                const pubDate = timeMatch ? `${year}-${timeMatch[1]}-${timeMatch[2]}` : '';
+                const dateLabel = timeMatch ? `${year}.${timeMatch[1]}.${timeMatch[2]} ${timeMatch[3]}` : '오늘';
+
+                // 주요 통화별 매매기준율 추출
+                const currencies = [];
+                // 테이블/텍스트에서 통화별 가격 패턴 찾기
+                const targetCodes = ['USD', 'EUR', 'JPY', 'CNY'];
+
+                // 테이블 행에서 통화 코드 + 첫 번째 가격(매매기준율) 추출
+                const rateMap = {};
+                document.querySelectorAll('table tr').forEach(row => {
+                    const text = row.innerText || '';
+                    targetCodes.forEach(code => {
+                        if (text.includes(code) && !rateMap[code]) {
+                            const m = text.match(/(\d{1,2},?\d{1,3}\.\d{2})/);
+                            if (m) rateMap[code] = m[1];
+                        }
+                    });
+                });
+
+                if (Object.keys(rateMap).length > 0) {
+                    const usd = rateMap['USD'] || '-';
+                    const eur = rateMap['EUR'] || '-';
+                    const jpy = rateMap['JPY'] || '-';
+                    const cny = rateMap['CNY'] || '-';
+
+                    // 등락 정보 추출
+                    const changeMatch = pageText.match(/USD[\s\S]*?(▲|▼)\s*([\d.]+)/);
+                    const changeStr = changeMatch ? ` (${changeMatch[1]}${changeMatch[2]})` : '';
+
+                    const summary = `[${dateLabel}] 매매기준율 | USD: ${usd}원 | EUR: ${eur}원 | JPY(100): ${jpy}원 | CNY: ${cny}원`;
+                    results.push({
+                        title: `[환율] ${dateLabel} 원/달러 ${usd}원${changeStr}`,
+                        link: `https://www.etoday.co.kr/market/currencies#${pubDate}`,
+                        thumbnail: '',
+                        summary: summary,
+                        source: 'EtodayFX',
+                        published_at: pubDate
+                    });
+                }
+            } else if (selector === 'autoview') {
+                // [중고차 업계] 오토뷰 - 매매상사·딜러·플랫폼·업계 동향
+                document.querySelectorAll('.article-card-list, a[href*="/ko-kr/articles/"]').forEach(el => {
+                    const linkEl = el.tagName === 'A' ? el : el.querySelector('a');
+                    if (!linkEl) return;
+                    const href = linkEl.href || '';
+                    if (!href.includes('/articles/')) return;
+                    const titleEl = el.querySelector('.article-title-list, h2, h3');
+                    const summaryEl = el.querySelector('.article-subtitle-list, p');
+                    const imgEl = el.querySelector('img');
+                    const dateEl = el.querySelector('.article-date-list, time');
+                    const title = titleEl?.innerText?.trim() || linkEl.innerText?.trim() || '';
+                    if (title.length > 5) {
+                        const dateText = dateEl?.innerText?.trim() || '';
+                        const dm = dateText.match(/(\d{4})[-.](\d{2})[-.](\d{2})/);
+                        results.push({
+                            title,
+                            link: href,
+                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
+                            summary: summaryEl?.innerText?.trim() || title,
+                            source: 'AutoView',
+                            published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                        });
+                    }
+                });
+            } else if (selector === 'moleg') {
+                // [법규/제도] 법제처 입법예고 - 중고차·자동차 관련 법규만 필터링
+                const molegKeywords = [
+                    '자동차관리', '자동차등록', '자동차안전', '자동차검사',
+                    '중고자동차', '중고차', '매매업', '매매사업', '성능점검', '성능상태',
+                    '이전등록', '말소등록', '임시운행', '자동차세', '취득세',
+                    '허위매물', '자동차보험', '배출가스', '도로교통',
+                    '교통안전', '운전면허', '자율주행', '전기차', '전기자동차',
+                    '자동차부품', '자동차손해', '대폐차', '압류', '저당'
+                ];
+                document.querySelectorAll('a[href*="makingInfo.mo"]').forEach(a => {
+                    const href = a.href || '';
+                    const text = a.innerText?.trim() || '';
+                    if (text.length > 5 && href.includes('lawSeq')) {
+                        // 중고차·자동차 관련 키워드 포함 여부 확인
+                        const matched = molegKeywords.some(kw => text.includes(kw));
+                        if (!matched) return;
+                        const row = a.closest('tr, li, div');
+                        const cells = row?.querySelectorAll('td') || [];
+                        const dateText = cells.length > 3 ? cells[cells.length - 2]?.innerText?.trim() : '';
+                        const dm = dateText.match(/(\d{4})[-.](\d{2})[-.](\d{2})/);
+                        results.push({
+                            title: text,
+                            link: href,
+                            thumbnail: '',
+                            summary: text,
+                            source: 'Moleg',
+                            published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                        });
+                    }
+                });
+            } else if (selector === 'kotsa') {
+                // [법규/제도] 한국교통안전공단 보도자료 - 자동차검사, 성능점검 관련만 필터링
+                const kotsaKeywords = [
+                    '자동차', '중고차', '검사', '성능점검', '리콜', '안전기준',
+                    '배출가스', '매연', '이륜', '전기차', '자율주행',
+                    '운전', '면허', '교통사고', '교통안전', '사망',
+                    '이전등록', '튜닝', '개조', '불법', '단속'
+                ];
+                document.querySelectorAll('tr').forEach(tr => {
+                    const cells = tr.querySelectorAll('td');
+                    if (cells.length < 3) return;
+                    const linkEl = tr.querySelector('a');
+                    if (!linkEl) return;
+                    const text = linkEl.innerText?.trim() || '';
+                    if (text.length < 10) return;
+                    // 자동차·교통 관련 키워드 필터
+                    const matched = kotsaKeywords.some(kw => text.includes(kw));
+                    if (!matched) return;
+                    const onclick = linkEl.getAttribute('onclick') || '';
+                    const href = linkEl.href || '';
+                    // fnView(bbscCode, cateCode, bbscSeqn) 패턴
+                    const fnMatch = onclick.match(/fnView\([^,]*,[^,]*,\s*(\d+)/);
+                    const seqn = fnMatch ? fnMatch[1] : '';
+                    const finalLink = seqn
+                        ? `https://main.kotsa.or.kr/portal/bbs/report_view.do?menuCode=05010200&bbscCode=report&bbscSeqn=${seqn}`
+                        : href;
+                    if (!finalLink || finalLink === '#' || finalLink.endsWith('#a')) {
+                        if (!seqn) return;
+                    }
+                    const dateCell = cells[cells.length - 2] || cells[cells.length - 1];
+                    const dateText = dateCell?.innerText?.trim() || '';
+                    const dm = dateText.match(/(\d{4})[-.](\d{2})[-.](\d{2})/);
+                    results.push({
+                        title: text,
+                        link: finalLink,
+                        thumbnail: '',
+                        summary: text,
+                        source: 'KOTSA',
+                        published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                    });
+                });
+            } else if (selector === 'customs') {
+                // [수출/물류] 관세청 보도자료 - 수출입, 관세, 무역규제
+                document.querySelectorAll('.nttInfoBtn, [data-id]').forEach(el => {
+                    const nttSn = el.getAttribute('data-id') || '';
+                    const text = el.innerText?.trim() || '';
+                    if (!nttSn || text.length < 10) return;
+                    const row = el.closest('tr');
+                    const cells = row?.querySelectorAll('td') || [];
+                    const dateCell = Array.from(cells).find(td => /\d{4}\.\d{2}\.\d{2}/.test(td.innerText));
+                    const dateText = dateCell?.innerText?.trim() || '';
+                    const dm = dateText.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+                    results.push({
+                        title: text.split('\n')[0].trim(),
+                        link: `https://www.customs.go.kr/kcs/na/ntt/selectNttInfo.do?nttSn=${nttSn}&bbsId=1362&mi=2891`,
+                        thumbnail: '',
+                        summary: text.substring(0, 200),
+                        source: 'Customs',
+                        published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                    });
+                });
+                // fallback: 테이블 구조에서 직접 추출
+                if (results.length === 0) {
+                    document.querySelectorAll('tr').forEach(tr => {
+                        const cells = tr.querySelectorAll('td');
+                        if (cells.length < 4) return;
+                        const linkEl = tr.querySelector('a');
+                        if (!linkEl) return;
+                        const text = linkEl.innerText?.trim() || '';
+                        const dataId = linkEl.getAttribute('data-id') || '';
+                        if (text.length > 10 && dataId) {
+                            const dateText = cells[cells.length - 2]?.innerText?.trim() || '';
+                            const dm = dateText.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+                            results.push({
+                                title: text,
+                                link: `https://www.customs.go.kr/kcs/na/ntt/selectNttInfo.do?nttSn=${dataId}&bbsId=1362&mi=2891`,
+                                thumbnail: '',
+                                summary: text,
+                                source: 'Customs',
+                                published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                            });
+                        }
+                    });
+                }
+            } else if (selector === 'mof') {
+                // [수출/물류] 해양수산부 보도자료 - 해운, 항만, 선적, 수출물류
+                document.querySelectorAll('a[onclick*="fn_selectDoc"]').forEach(a => {
+                    const onclick = a.getAttribute('onclick') || '';
+                    const seqMatch = onclick.match(/fn_selectDoc\(\s*(\d+)/);
+                    const text = a.innerText?.trim() || '';
+                    if (!seqMatch || text.length < 10) return;
+                    const docSeq = seqMatch[1];
+                    const row = a.closest('tr');
+                    const cells = row?.querySelectorAll('td') || [];
+                    const dateCell = Array.from(cells).find(td => /\d{4}\.\d{2}\.\d{2}/.test(td.innerText));
+                    const dateText = dateCell?.innerText?.trim() || '';
+                    const dm = dateText.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+                    results.push({
+                        title: text,
+                        link: `https://www.mof.go.kr/doc/ko/selectDoc.do?docSeq=${docSeq}&menuSeq=971&bbsSeq=10`,
+                        thumbnail: '',
+                        summary: text,
+                        source: 'MOF',
+                        published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                    });
+                });
+                // fallback: 테이블 직접 파싱
+                if (results.length === 0) {
+                    document.querySelectorAll('tr').forEach(tr => {
+                        const cells = tr.querySelectorAll('td');
+                        if (cells.length < 4) return;
+                        const linkEl = tr.querySelector('a');
+                        if (!linkEl) return;
+                        const text = linkEl.innerText?.trim() || '';
+                        const href = linkEl.href || '';
+                        if (text.length > 10 && href.includes('selectDoc')) {
+                            const dateText = cells[cells.length - 2]?.innerText?.trim() || '';
+                            const dm = dateText.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+                            results.push({
+                                title: text,
+                                link: href,
+                                thumbnail: '',
+                                summary: text,
+                                source: 'MOF',
+                                published_at: dm ? `${dm[1]}-${dm[2]}-${dm[3]}` : ''
+                            });
+                        }
+                    });
+                }
             }
             return results;
         }, parserSelector);
@@ -577,10 +808,39 @@ async function main() {
         scrapeWithBrowser('https://www.edaily.co.kr/economy', 'edaily')
     ]);
 
+    // === [신규] 환율 뉴스 ===
+    const [etodayFx] = await Promise.all([
+        // 16. 이투데이 환율/외환 뉴스 - 원달러, 환율 동향
+        scrapeWithBrowser('https://www.etoday.co.kr/market/currencies', 'etoday_fx')
+    ]);
+
+    // === [신규] 중고차 업계 동향 - 매매상사·딜러·플랫폼·인증중고차 ===
+    const [autoview] = await Promise.all([
+        // 17. 오토뷰 - 자동차 업계 뉴스, 딜러·매매상사·플랫폼 동향
+        scrapeWithBrowser('https://www.autoview.co.kr/ko-kr/articles', 'autoview')
+    ]);
+
+    // === [신규] 법규/제도 - 자동차관리법, 성능점검, 매매업 등록, 세금 ===
+    const [moleg, kotsa] = await Promise.all([
+        // 18. 법제처 입법예고 - 자동차관리법, 도로교통법, 등록규칙 개정
+        scrapeWithBrowser('https://www.moleg.go.kr/lawinfo/makingList.mo?mid=a10104010000', 'moleg'),
+        // 19. 한국교통안전공단 보도자료 - 자동차검사, 성능점검, 교통안전
+        scrapeWithBrowser('https://main.kotsa.or.kr/portal/bbs/report_list.do?menuCode=05010200', 'kotsa')
+    ]);
+
+    // === [신규] 수출/물류 - 중고차 수출, 해운, 항만, 관세 ===
+    const [customs, mof] = await Promise.all([
+        // 20. 관세청 보도자료 - 수출입 현황, 관세정책, 무역규제
+        scrapeWithBrowser('https://www.customs.go.kr/kcs/na/ntt/selectNttList.do?bbsId=1362&mi=2891', 'customs'),
+        // 21. 해양수산부 보도자료 - 해운운임, 항만물류, 선적, 수출규제
+        scrapeWithBrowser('https://www.mof.go.kr/doc/ko/selectDocList.do?menuSeq=971&bbsSeq=10', 'mof')
+    ]);
+
     const allArticles = [
         ...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown, ...dailytrendBiz,
         ...dailycar, ...autoherald, ...motorgraph, ...bobaedream, ...danawaAuto, ...encarMag, ...chosunbiz, ...molit,
-        ...carRecall, ...carRecallNews, ...fsc, ...kma, ...knia, ...opinet, ...edaily
+        ...carRecall, ...carRecallNews, ...fsc, ...kma, ...knia, ...opinet, ...edaily,
+        ...etodayFx, ...autoview, ...moleg, ...kotsa, ...customs, ...mof
     ];
     const uniqueArticles = Array.from(new Map(allArticles.map(item => [item.link, item])).values());
     const shuffledArticles = shuffleArray(uniqueArticles);
