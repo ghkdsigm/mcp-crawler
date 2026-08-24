@@ -3,7 +3,8 @@
     "version": "1.0.0",
     "type": "module",
     "scripts": {
-        "start": "node index.js"
+        "start": "node index.js",
+        "build": "pkg crawler.cjs --targets node22-win-x64 --output dist/mcp-crawler.exe"
     },
     "dependencies": {
         "@supabase/supabase-js": "^2.39.0",
@@ -13,5 +14,8 @@
         "puppeteer": "^24.37.5",
         "puppeteer-extra": "^3.3.6",
         "puppeteer-extra-plugin-stealth": "^2.11.2"
+    },
+    "devDependencies": {
+        "@yao-pkg/pkg": "^6.19.0"
     }
 }

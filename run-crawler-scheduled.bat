@@ -1,6 +1,6 @@
 @echo off
 chcp 65001 >nul
-cd /d "%~dp0"
+cd /d "C:\workspace\mcp-crawler"
 
 if not exist "node_modules" (
     echo [오류] node_modules가 없습니다. 먼저 'npm install'을 실행하세요.
