@@ -736,6 +736,43 @@ async function scrapeWithBrowser(url, parserSelector) {
                         }
                     });
                 }
+            } else if (selector === 'kosis') {
+                // KOSIS 경제상황판 인포그래픽 - 지역경제동향 주요 지표 (분기별 갱신)
+                // 지표 블록(.SurveyBlock)마다 전국 값 + 상위/하위 3개 지역. 국내인구 순이동자수는 전국 값 없음.
+                const WANTED = ['서비스업생산지수', '소매판매액지수', '고용률', '실업률', '소비자물가지수', '국내인구 순이동자수'];
+                const clean = (t) => (t || '').replace(/\s+/g, ' ').trim();
+                const regionList = (box) => Array.from(box?.querySelectorAll('li') || [])
+                    .map(li => `${clean(li.querySelector('span')?.textContent)} ${clean(li.querySelector('strong')?.textContent)}`)
+                    .join(' · ');
+                document.querySelectorAll('.SurveyBlock').forEach(block => {
+                    const h3 = block.querySelector('h3');
+                    const name = clean(h3?.firstChild?.textContent);
+                    if (!WANTED.includes(name)) return;
+                    // 단위: "(전년동분기 대비 증감률, %)" → 괄호 제거
+                    const unit = clean(block.querySelector(':scope > .Unit')?.textContent).replace(/^\(|\)$/g, '');
+                    const totalEl = block.querySelector('.Total dd strong');
+                    const national = totalEl ? clean(totalEl.firstChild?.textContent) : '';
+                    const sourceText = clean(block.querySelector('.Source')?.textContent).replace(/^출처:\s*/, '');
+                    const periodMatch = sourceText.match(/\((\d{4}\.\d\/4분기)\)/);
+                    const period = periodMatch ? periodMatch[1] : '';
+                    const top = regionList(block.querySelector('.ranking .Top'));
+                    const bottom = regionList(block.querySelector('.ranking .Bottom'));
+                    if (!period || (!national && !top)) return;
+
+                    // summary는 " | " 구분, 지역 목록은 " · " 구분 (값에 쉼표가 들어가므로) — jarvis-app 한국경제상황판 탭이 이 형식을 파싱함
+                    const parts = [];
+                    if (national) parts.push(`전국: ${national}`);
+                    parts.push(`단위: ${unit}`, `상위: ${top}`, `하위: ${bottom}`, `기준: ${period}`, `출처: ${sourceText}`);
+                    const unitSuffix = (unit.match(/,\s*([^,]+)$/) || [])[1] || '';
+                    results.push({
+                        title: `[한국경제상황판] ${name} (${period})${national ? ` 전국 ${national}${unitSuffix}` : ''}`,
+                        link: `https://kosis.kr/visual/economyBoard/economyInfographic.do?lang=ko&unitySrvcId=367#${encodeURIComponent(name)}-${period.replace('/4분기', 'Q').replace('.', '-')}`,
+                        thumbnail: '',
+                        summary: parts.join(' | '),
+                        source: 'KOSIS',
+                        category: 'korea_economy'
+                    });
+                });
             }
             return results;
         }, parserSelector);
@@ -836,6 +873,12 @@ async function main() {
         scrapeWithBrowser('https://www.mof.go.kr/doc/ko/selectDocList.do?menuSeq=971&bbsSeq=10', 'mof')
     ]);
 
+    // === [신규] 한국경제상황판 - KOSIS 지역경제동향 지표 (분기별 갱신, 매일 덮어씀) ===
+    const [kosis] = await Promise.all([
+        // 22. KOSIS 경제상황판 인포그래픽 - 서비스업생산·소매판매·고용률·실업률·소비자물가·인구순이동
+        scrapeWithBrowser('https://kosis.kr/visual/economyBoard/economyInfographic.do?lang=ko&unitySrvcId=367', 'kosis')
+    ]);
+
     const allArticles = [
         ...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown, ...dailytrendBiz,
         ...dailycar, ...autoherald, ...motorgraph, ...bobaedream, ...danawaAuto, ...encarMag, ...chosunbiz, ...molit,
@@ -857,6 +900,18 @@ async function main() {
             console.error('❌ 저장 실패:', error.message);
             process.exitCode = 1;
         } else console.log(`🎉 미션 완료! ${data.length}개의 데이터가 정확한 링크와 함께 저장되었습니다.`);
+    }
+
+    // 한국경제상황판은 category 컬럼을 채우므로 따로 저장 — 함께 upsert하면 category 없는 기사 행의 기존 값이 null로 덮어써짐
+    if (kosis.length > 0) {
+        const { error } = await supabase
+            .from('news_feed')
+            .upsert(kosis, { onConflict: 'link' });
+
+        if (error) {
+            console.error('❌ 한국경제상황판 저장 실패:', error.message);
+            process.exitCode = 1;
+        } else console.log(`📈 한국경제상황판 ${kosis.length}개 지표 저장 완료`);
     }
 }
 

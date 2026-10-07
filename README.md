@@ -10,16 +10,17 @@
 - Node.js가 설치된 PC에서 바로 사용 가능  
 - 실행 전 `npm install` 한 번, `.env`에 Supabase URL/KEY 설정 필요  
 
-### 2) 매일 자동 실행 (작업 스케줄러, 하루 2회)
+### 2) 매일 자동 실행 (작업 스케줄러, 하루 1회)
 
 1. **`setup-daily-task.bat`**를 **관리자 권한**으로 실행  
-2. 작업 스케줄러에 "MCP-Crawler-Daily"가 등록되고, **매일 오전 9시 30분, 오후 2시** 두 번 `run-crawler-scheduled.bat`이 실행됨  
+2. 작업 스케줄러에 "MCP-Crawler-Daily"가 등록되고, **매일 오전 6시**에 `run-crawler-scheduled.bat`이 실행됨  
+   - PC가 꺼져 있어 실행 시간을 놓치면, 다음에 켜지고 로그인했을 때 바로 실행됨 (배터리 사용 중에도 실행)  
 3. 실행 시간 변경: Windows **작업 스케줄러** → 해당 작업 더블클릭 → **트리거** 탭에서 시간 수정 (또는 `setup-daily-task.bat`의 `-At` 값 수정 후 재실행)  
 
 수동으로 작업 만들기:
 
 - 프로그램: `D:\workspace_2\mcp-crawler\run-crawler-scheduled.bat` (실제 경로로 변경)
-- 트리거: 매일 09:30, 매일 14:00 (트리거 2개 추가)
+- 트리거: 매일 06:00
 - 시작 위치(선택): `D:\workspace_2\mcp-crawler`
 
 ### 3) EXE 실행 파일로 만들기 (선택)
