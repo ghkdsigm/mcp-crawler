@@ -441,26 +441,26 @@ async function scrapeWithBrowser(url, parserSelector) {
                     });
                 }
             } else if (selector === 'opinet') {
-                // 오피넷 - 유가 정보 (메인페이지에서 유종별 가격 추출)
+                // 오피넷 - 유가 정보 (메인페이지 탭별 전국평균 가격 추출)
+                // innerText는 숨겨진 탭(경유/LPG)을 포함하지 않고 날짜(2026.10)가 가격 패턴에 걸리므로 DOM에서 직접 읽음
                 const priceDiv = document.querySelector('.oll_price');
                 if (priceDiv) {
-                    const text = priceDiv.innerText || '';
-                    const dateMatch = text.match(/(\d{4})\.(\d{2})\.(\d{2})/);
+                    const dateText = priceDiv.querySelector('.today .text-2')?.textContent || '';
+                    const dateMatch = dateText.match(/(\d{4})\.(\d{2})\.(\d{2})/);
                     const pubDate = dateMatch ? `${dateMatch[1]}-${dateMatch[2]}-${dateMatch[3]}` : '';
                     const dateLabel = dateMatch ? `${dateMatch[1]}.${dateMatch[2]}.${dateMatch[3]}` : '오늘';
 
-                    // 전국평균 가격 추출
-                    const gasMatch = text.match(/휘발유[\s\S]*?전국평균[\s\S]*?(\d{3,4}\.\d{2})\s*(▲|▼|-)?\s*([\d.]*)/);
-                    const dieselMatch = text.match(/경유[\s\S]*?전국평균[\s\S]*?(\d{3,4}\.\d{2})\s*(▲|▼|-)?\s*([\d.]*)/);
+                    // #oilcon1: 휘발유, #oilcon2: 경유, #oilcon3: LPG / 각 탭의 첫 번째 dl이 전국평균
+                    const nationalPrice = (n) =>
+                        priceDiv.querySelector(`#oilcon${n} dl:first-of-type .text-3`)?.textContent.trim() || '';
+                    const gasoline = nationalPrice(1);
+                    const diesel = nationalPrice(2);
+                    const lpg = nationalPrice(3);
 
-                    // 전체 텍스트에서 가격 패턴 찾기
-                    const prices = text.match(/\d{3,4}\.\d{2}/g) || [];
-                    const arrows = text.match(/[▲▼]/g) || [];
-
-                    if (prices.length > 0) {
-                        const summary = `[${dateLabel}] 전국 평균 유가 | 휘발유: ${prices[0] || '-'}원 | 경유: ${prices[1] || '-'}원 | LPG: ${prices[2] || '-'}원`;
+                    if (gasoline || diesel || lpg) {
+                        const summary = `[${dateLabel}] 전국 평균 유가 | 휘발유: ${gasoline || '-'}원 | 경유: ${diesel || '-'}원 | LPG: ${lpg || '-'}원`;
                         results.push({
-                            title: `[주간유가] ${dateLabel} 전국 평균 기름값 - 휘발유 ${prices[0]}원`,
+                            title: `[주간유가] ${dateLabel} 전국 평균 기름값 - 휘발유 ${gasoline || '-'}원`,
                             link: `https://www.opinet.co.kr/user/main/mainView.do#${pubDate}`,
                             thumbnail: '',
                             summary: summary,
@@ -853,8 +853,10 @@ async function main() {
             .upsert(shuffledArticles, { onConflict: 'link' })
             .select();
 
-        if (error) console.error('❌ 저장 실패:', error.message);
-        else console.log(`🎉 미션 완료! ${data.length}개의 데이터가 정확한 링크와 함께 저장되었습니다.`);
+        if (error) {
+            console.error('❌ 저장 실패:', error.message);
+            process.exitCode = 1;
+        } else console.log(`🎉 미션 완료! ${data.length}개의 데이터가 정확한 링크와 함께 저장되었습니다.`);
     }
 }
 

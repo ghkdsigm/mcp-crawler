@@ -8,10 +8,10 @@ set TASK_NAME=MCP-Crawler-Daily
 echo 작업 스케줄러에 등록합니다.
 echo - 작업 이름: %TASK_NAME%
 echo - 실행 파일: %BAT_PATH%
-echo - 실행 시간: 매일 오전 6시
+echo - 실행 시간: 매일 오전 9시 30분, 오후 2시 (하루 2회)
 echo.
 
-schtasks /create /tn "%TASK_NAME%" /tr "\"%BAT_PATH%\"" /sc daily /st 06:00 /f /rl highest
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; $a = New-ScheduledTaskAction -Execute '%BAT_PATH%' -WorkingDirectory '%~dp0'; $t = @((New-ScheduledTaskTrigger -Daily -At 09:30), (New-ScheduledTaskTrigger -Daily -At 14:00)); Register-ScheduledTask -TaskName '%TASK_NAME%' -Action $a -Trigger $t -RunLevel Highest -Force | Out-Null"
 if %ERRORLEVEL% neq 0 (
     echo 등록 실패. 관리자 권한으로 실행해 보세요.
     pause
