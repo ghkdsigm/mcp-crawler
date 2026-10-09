@@ -1,6 +1,10 @@
 import 'dotenv/config'
 import { createClient } from '@supabase/supabase-js'
 import puppeteer from 'puppeteer-extra'
+import path from 'node:path'
+import { fileURLToPath } from 'node:url'
+import axios from 'axios'
+import * as cheerio from 'cheerio'
 import StealthPlugin from 'puppeteer-extra-plugin-stealth'
 
 puppeteer.use(StealthPlugin())
@@ -210,7 +214,7 @@ async function scrapeWithBrowser(url, parserSelector) {
                 const year = new Date().getFullYear();
                 links.forEach(linkEl => {
                     const title = linkEl.innerText.replace(/\[.*?\]/g, '').trim();
-                    const href = linkEl.href;
+                    const href = linkEl.href.replace(/&bm=\d+/, ''); // 상단 '베스트' 영역 링크(&bm=1)는 같은 글 — 중복 제거
                     if (title.length > 5 && !seen.has(href)) {
                         seen.add(href);
                         const row = linkEl.closest('tr, li, div');
@@ -250,23 +254,25 @@ async function scrapeWithBrowser(url, parserSelector) {
                 });
             } else if (selector === 'encar_magazine') {
                 // 엔카매거진 - 중고차 시세/트렌드
-                const links = document.querySelectorAll('a[href*="/view/"]');
+                // 2026-08 이후 encarmagazine.com → encar.com/mg/ 로 이전. 기사 카드 = a[href*="mg/post.do"][method=view]
+                //  제목 strong.tit_smry · 요약 span.cnt_smry (예전 /view/ + encarmagazine.com 조건은 0건)
                 const seen = new Set();
-                links.forEach(linkEl => {
-                    const href = linkEl.href;
-                    if (seen.has(href) || !href.includes('encarmagazine.com')) return;
-                    const title = linkEl.innerText.trim();
-                    if (title.length > 5) {
-                        seen.add(href);
-                        const imgEl = linkEl.querySelector('img') || linkEl.closest('div, li, article')?.querySelector('img');
-                        results.push({
-                            title,
-                            link: href,
-                            thumbnail: imgEl?.currentSrc || imgEl?.src || '',
-                            summary: title,
-                            source: 'EncarMagazine'
-                        });
-                    }
+                document.querySelectorAll('a[href*="mg/post.do"][href*="method=view"]').forEach(linkEl => {
+                    const postId = linkEl.href.match(/postid=(\d+)/)?.[1];
+                    if (!postId || seen.has(postId)) return;
+                    const title = (linkEl.querySelector('.tit_smry')?.innerText || linkEl.innerText.split('\n')[0] || '').trim();
+                    if (title.length <= 5) return;
+                    seen.add(postId);
+                    const imgEl = linkEl.querySelector('img');
+                    const summary = linkEl.querySelector('.cnt_smry')?.innerText?.trim().replace(/\s+/g, ' ') || title;
+                    results.push({
+                        title,
+                        // 같은 글이 섹션마다 다른 쿼리로 반복 → postid 기준 정규 URL
+                        link: `https://www.encar.com/mg/post.do?method=view&pagetype=news&postid=${postId}`,
+                        thumbnail: imgEl?.getAttribute('data-sub-image') || imgEl?.currentSrc || imgEl?.src || '',
+                        summary: summary.slice(0, 300),
+                        source: 'EncarMagazine'
+                    });
                 });
             } else if (selector === 'chosunbiz_auto') {
                 // 조선비즈 자동차 - 금리, 경제, 완성차, 수입차 뉴스
@@ -618,25 +624,24 @@ async function scrapeWithBrowser(url, parserSelector) {
                 document.querySelectorAll('tr').forEach(tr => {
                     const cells = tr.querySelectorAll('td');
                     if (cells.length < 3) return;
-                    const linkEl = tr.querySelector('a');
+                    const linkEl = tr.querySelector('td[data-bbsbody="subject"] a') || tr.querySelector('a');
                     if (!linkEl) return;
-                    const text = linkEl.innerText?.trim() || '';
+                    // 제목 앞 "새글" 등 아이콘(<i>) 텍스트 제외
+                    const clone = linkEl.cloneNode(true);
+                    clone.querySelectorAll('i').forEach(i => i.remove());
+                    const text = clone.innerText?.trim() || clone.textContent?.trim() || '';
                     if (text.length < 10) return;
                     // 자동차·교통 관련 키워드 필터
                     const matched = kotsaKeywords.some(kw => text.includes(kw));
                     if (!matched) return;
                     const onclick = linkEl.getAttribute('onclick') || '';
-                    const href = linkEl.href || '';
-                    // fnView(bbscCode, cateCode, bbscSeqn) 패턴
-                    const fnMatch = onclick.match(/fnView\([^,]*,[^,]*,\s*(\d+)/);
+                    // fnView('report','','18958','1',...) — 인자가 따옴표로 감싸져 있음(3번째 = 게시글 번호).
+                    //  예전 정규식은 따옴표를 허용하지 않아 전 건이 번호 없음 → 0건이었다.
+                    const fnMatch = onclick.match(/fnView\(\s*'?[^,']*'?\s*,\s*'?[^,']*'?\s*,\s*'?(\d+)'?/);
                     const seqn = fnMatch ? fnMatch[1] : '';
-                    const finalLink = seqn
-                        ? `https://main.kotsa.or.kr/portal/bbs/report_view.do?menuCode=05010200&bbscCode=report&bbscSeqn=${seqn}`
-                        : href;
-                    if (!finalLink || finalLink === '#' || finalLink.endsWith('#a')) {
-                        if (!seqn) return;
-                    }
-                    const dateCell = cells[cells.length - 2] || cells[cells.length - 1];
+                    if (!seqn) return; // href 는 "#a" 뿐이라 번호 없으면 상세 링크를 만들 수 없음
+                    const finalLink = `https://main.kotsa.or.kr/portal/bbs/report_view.do?menuCode=05010200&bbscCode=report&bbscSeqn=${seqn}`;
+                    const dateCell = tr.querySelector('td[data-bbsbody="date"]') || cells[cells.length - 2] || cells[cells.length - 1];
                     const dateText = dateCell?.innerText?.trim() || '';
                     const dm = dateText.match(/(\d{4})[-.](\d{2})[-.](\d{2})/);
                     results.push({
@@ -795,8 +800,64 @@ async function scrapeWithBrowser(url, parserSelector) {
     }
 }
 
+// ── 중고차 수급(공급/수요) 뉴스 검색 수집 ──
+// 고정 사이트 목록만으로는 중고차 수급 기사가 주 0~1건 수준이라(2026-10 실측) 뉴스 검색 RSS로 보강한다.
+//  Bing 뉴스 RSS: 원문 언론사 링크(apiclick url 파라미터) + 요약 + 언론사명을 준다(Google 뉴스 RSS는 중계 링크라 원문 추출 불가).
+//  검색 결과가 느슨하므로 "중고차 + 공급/수요 신호" 둘 다 있는 기사만 남긴다 — jarvis-app server/src/echo/radarEcho.ts
+//  isUsedCarSupplyDemandNews 와 같은 기준(메아리 중고차 수급 레인이 이 기사들을 후보로 쓴다).
+const USED_CAR_QUERIES = ['중고차 시세', '중고차 거래량', '중고차 매물', '중고차 수요', '중고차 수출', '중고차 시장', '중고차 재고', '중고차 경매'];
+const USED_CAR_RE = /중고\s?차|중고\s?(자동차|승용차|전기차|수입차|트럭)/;
+const SUPPLY_DEMAND_RE = /공급|수요|매물|재고|거래\s?(량|대수|건수|절벽|감소|증가|회복)|판매\s?(량|대수)|이전\s?등록|등록\s?대수|수출|경매|낙찰|매입|시세|가격\s?(하락|상승|급락|급등)|감가|잔존\s?가치|입고|회전율|품귀|공급\s?과잉/;
+export const isUsedCarSupplyDemand = (text) => USED_CAR_RE.test(text) && SUPPLY_DEMAND_RE.test(text);
+export const USED_CAR_CATEGORY = 'used_car_market';
+
+function ymd(dateLike) {
+    const d = new Date(dateLike);
+    return Number.isNaN(d.getTime()) ? todayDate() : new Date(d.getTime() + 9 * 3600e3).toISOString().split('T')[0]; // KST 날짜
+}
+
+async function fetchUsedCarSupplyDemandNews({ maxAgeDays = 7, limit = 40 } = {}) {
+    const byLink = new Map();
+    const cutoff = Date.now() - maxAgeDays * 86400e3;
+    for (const q of USED_CAR_QUERIES) {
+        const url = `https://www.bing.com/news/search?q=${encodeURIComponent(q)}&format=rss&setlang=ko-KR&cc=KR&qft=sortbydate%3d%221%22`;
+        try {
+            const { data } = await axios.get(url, { timeout: 15000, headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36' } });
+            const $ = cheerio.load(data, { xmlMode: true });
+            $('item').each((_, it) => {
+                const f = {};
+                $(it).children().each((__, c) => { f[c.tagName] = $(c).text().trim(); });
+                let link = '';
+                try { link = new URL(f.link).searchParams.get('url') || f.link; } catch { return; }
+                if (!/^https?:\/\//i.test(link)) return;
+                const title = (f.title || '').trim();
+                const summary = (f.description || '').replace(/\s+/g, ' ').trim();
+                if (title.length < 6 || !isUsedCarSupplyDemand(`${title} ${summary}`)) return;
+                const pub = new Date(f.pubDate || Date.now()).getTime();
+                if (Number.isFinite(pub) && pub < cutoff) return;
+                if (!byLink.has(link)) byLink.set(link, {
+                    title,
+                    link,
+                    thumbnail: f['News:Image'] || '',
+                    summary: (summary || title).slice(0, 300),
+                    source: (f['News:Source'] || 'UsedCarNews').replace(/\s+on MSN$/i, '').slice(0, 40), // 언론사명(메아리 "출처:" 줄에 그대로 노출)
+                    published_at: ymd(f.pubDate || Date.now()),
+                    category: USED_CAR_CATEGORY
+                });
+            });
+        } catch (e) {
+            console.error(`❌ 중고차 수급 검색 실패 "${q}":`, e.message);
+        }
+        await new Promise(r => setTimeout(r, 800)); // 연속 요청 간격
+    }
+    const list = [...byLink.values()].sort((a, b) => b.published_at.localeCompare(a.published_at)).slice(0, limit);
+    console.log(`✅ 중고차 수급 뉴스 검색 -> ${list.length}건 (검색어 ${USED_CAR_QUERIES.length}개, 키워드 필터 통과)`);
+    return list;
+}
+
 async function main() {
-    console.log('🚀 [HTML 분석 완료] 초정밀 크롤링을 시작합니다...');
+    const DRY = process.argv.includes('--dry'); // DB 저장 없이 수집 결과만 출력(진단용)
+    console.log(`🚀 [HTML 분석 완료] 초정밀 크롤링을 시작합니다...${DRY ? ' (DRY RUN — DB 저장 안 함)' : ''}`);
 
     // === 기존 IT/비즈니스 뉴스 ===
     const [yozmBiz, yozmTrend, aiTimes, rundown, dailytrendBiz] = await Promise.all([
@@ -879,6 +940,19 @@ async function main() {
         scrapeWithBrowser('https://kosis.kr/visual/economyBoard/economyInfographic.do?lang=ko&unitySrvcId=367', 'kosis')
     ]);
 
+    // === [신규] 중고차 수급(공급/수요) 뉴스 검색 — 메아리 중고차 수급 레인용 ===
+    const usedCarNews = await fetchUsedCarSupplyDemandNews();
+
+    if (DRY) {
+        const groups = { yozmBiz, yozmTrend, aiTimes, rundown, dailytrendBiz, dailycar, autoherald, motorgraph, bobaedream, danawaAuto, encarMag, chosunbiz, molit,
+            carRecall, carRecallNews, fsc, kma, knia, opinet, edaily, etodayFx, autoview, moleg, kotsa, customs, mof, kosis, usedCarNews };
+        console.log('\n📋 DRY RUN 수집 결과(저장 안 함):');
+        for (const [k, v] of Object.entries(groups)) console.log(`  ${k.padEnd(14)} ${String(v.length).padStart(3)}건`);
+        console.log('\n🚗 중고차 수급 뉴스:');
+        for (const a of usedCarNews) console.log(`  - ${a.published_at} [${a.source}] ${a.title.slice(0, 70)}\n      ${a.link}`);
+        return;
+    }
+
     const allArticles = [
         ...yozmBiz, ...yozmTrend, ...aiTimes, ...rundown, ...dailytrendBiz,
         ...dailycar, ...autoherald, ...motorgraph, ...bobaedream, ...danawaAuto, ...encarMag, ...chosunbiz, ...molit,
@@ -913,6 +987,21 @@ async function main() {
             process.exitCode = 1;
         } else console.log(`📈 한국경제상황판 ${kosis.length}개 지표 저장 완료`);
     }
+
+    // 중고차 수급 뉴스도 category 를 채우므로 따로 저장. 이미 다른 수집원으로 들어온 같은 링크는 덮어쓰지 않는다(ignoreDuplicates).
+    if (usedCarNews.length > 0) {
+        const { error } = await supabase
+            .from('news_feed')
+            .upsert(usedCarNews, { onConflict: 'link', ignoreDuplicates: true });
+
+        if (error) {
+            console.error('❌ 중고차 수급 뉴스 저장 실패:', error.message);
+            process.exitCode = 1;
+        } else console.log(`🚗 중고차 수급 뉴스 ${usedCarNews.length}건 저장(신규만 반영)`);
+    }
 }
 
-main();
+export { scrapeWithBrowser }
+
+// `node index.js`로 직접 실행할 때만 수집·저장. 진단 스크립트가 import 할 때는 실행하지 않는다.
+if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) main();
